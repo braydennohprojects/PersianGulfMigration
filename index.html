@@ -48,7 +48,7 @@
   <div class="sidebar">
     <h1>Persian Gulf Settlement Simulator</h1>
 
-    <p>Settlements cluster near water for economic benefit, group together to share infrastructure, and resist moving unless the pressure to relocate becomes strong enough. When the sea level changes, the coastline shifts and agents on newly flooded cells are displaced.</p>
+    <p>Settlements cluster near water for economic benefit and group together to share infrastructure, but over-concentration is penalized by a crowding term that produces a natural optimal cluster size. Agents resist moving unless the pressure to relocate becomes strong enough. When the sea level changes, the coastline shifts and agents on newly flooded cells are displaced.</p>
 
     <hr class="separator">
 
@@ -68,10 +68,10 @@
     <p>Each land cell has a utility</p>
 
     \[
-    U(\mathbf{x}) \;=\; -\,w_d \, \mathcal{D}(\mathbf{x}) \;+\; w_c \, \mathcal{C}(\mathbf{x})
+    U(\mathbf{x}) \;=\; -\,w_d \, \mathcal{D}(\mathbf{x}) \;+\; w_c \, \mathcal{C}(\mathbf{x}) \;-\; w_r \, \mathcal{C}(\mathbf{x})^2
     \]
 
-    <p>where \(\mathcal{D}\) is the Euclidean distance to the nearest <em>attractor</em> water cell and \(\mathcal{C}\) counts occupied Moore neighbors. The attractor set is controlled by the toggle below: either rivers only, or rivers + ocean. The friction threshold \(\mu\) governs voluntary migration: the worst cell swaps with the best empty cell only if the gain exceeds \(\mu\).</p>
+    <p>where \(\mathcal{D}\) is the Euclidean distance to the nearest <em>attractor</em> water cell and \(\mathcal{C}\) counts occupied Moore neighbors. The first two terms drive agents toward water and toward each other; the quadratic crowding term \(w_r\) penalizes over-concentration, producing an optimal cluster size at \(\mathcal{C}^* = w_c / 2w_r\). The attractor set is controlled by the toggle below: either rivers only, or rivers + ocean. The friction threshold \(\mu\) governs voluntary migration: the worst cell swaps with the best empty cell only if the gain exceeds \(\mu\).</p>
 
     <!-- Canvas -->
     <div style="margin: 1em 0;">
@@ -127,6 +127,10 @@
         <input id="sl-wc" type="range" min="0" max="10" step="0.1" value="4.0">
         <span id="v-wc">4.0</span>
 
+        <label for="sl-wr">\(w_r\) (crowding)</label>
+        <input id="sl-wr" type="range" min="0" max="2" step="0.05" value="0.3">
+        <span id="v-wr">0.3</span>
+
         <label for="sl-mu">\(\mu\) (friction)</label>
         <input id="sl-mu" type="range" min="0" max="50" step="0.5" value="5">
         <span id="v-mu">5</span>
@@ -160,7 +164,7 @@ var imgData = ctx.createImageData(COLS, ROWS);
 var pixels = new Uint32Array(imgData.data.buffer);
 
 var S = {}, V = {};
-["sea","strahler","pop","wd","wc","mu","swaps","delay"].forEach(function(k) {
+["sea","strahler","pop","wd","wc","wr","mu","swaps","delay"].forEach(function(k) {
   S[k] = document.getElementById("sl-" + k);
   V[k] = document.getElementById("v-" + k);
 });
@@ -186,6 +190,7 @@ S.pop.oninput = function(){ V.pop.textContent = this.value; };
 S.pop.onchange = function(){ onPopChange(); };
 S.wd.oninput = function(){ V.wd.textContent = this.value; baseUDirty = true; };
 S.wc.oninput = function(){ V.wc.textContent = this.value; };
+S.wr.oninput = function(){ V.wr.textContent = this.value; };
 S.mu.oninput = function(){ V.mu.textContent = this.value; };
 S.swaps.oninput = function(){ V.swaps.textContent = this.value; };
 S.delay.oninput = function(){ V.delay.textContent = this.value + " ms"; };
@@ -315,42 +320,45 @@ function updateNeighbors(r, c, delta) {
   }
 }
 
-function getBestPerimeter(wc) {
+function getBestPerimeter(wc, wr) {
   var best = -Infinity, idx = -1;
   for (var i = 0; i < N; i++) {
     if (village[i] || cellType[i] > 0 || neighbors[i] === 0) continue;
-    var sc = baseU[i] + neighbors[i] * wc;
+    var c = neighbors[i];
+    var sc = baseU[i] + c * wc - wr * c * c;
     if (sc > best) { best = sc; idx = i; }
   }
   if (idx === -1) {
     for (var j = 0; j < N; j++) {
       if (village[j] || cellType[j] > 0) continue;
-      var sc2 = baseU[j] + neighbors[j] * wc;
+      var c2 = neighbors[j];
+      var sc2 = baseU[j] + c2 * wc - wr * c2 * c2;
       if (sc2 > best) { best = sc2; idx = j; }
     }
   }
   return { idx: idx, score: best };
 }
 
-function getWorstVillage(wc) {
+function getWorstVillage(wc, wr) {
   var worst = Infinity, idx = -1;
   for (var i = 0; i < N; i++) {
     if (!village[i]) continue;
-    var sc = baseU[i] + neighbors[i] * wc;
+    var c = neighbors[i];
+    var sc = baseU[i] + c * wc - wr * c * c;
     if (sc < worst) { worst = sc; idx = i; }
   }
   return { idx: idx, score: worst };
 }
 
 function handleDrowned() {
-  var wc = gp("wc"), drowned = [];
+  var wc = gp("wc"), wr = gp("wr"), drowned = [];
   for (var i = 0; i < N; i++) { if (village[i] && cellType[i] > 0) drowned.push(i); }
   for (var d = 0; d < drowned.length; d++) {
     var idx = drowned[d]; village[idx] = 0;
     updateNeighbors((idx/COLS)|0, idx%COLS, -1);
   }
   for (var d2 = 0; d2 < drowned.length; d2++) {
-    var best = getBestPerimeter(wc);
+    var best = getBestPerimeter(wc, wr);
     if (best.idx >= 0) {
       village[best.idx] = 1;
       updateNeighbors((best.idx/COLS)|0, best.idx%COLS, 1);
@@ -360,11 +368,11 @@ function handleDrowned() {
 
 function caStep() {
   if (baseUDirty) recomputeBaseU();
-  var wc = gp("wc"), mu = gp("mu"), swaps = gp("swaps");
+  var wc = gp("wc"), wr = gp("wr"), mu = gp("mu"), swaps = gp("swaps");
   for (var s = 0; s < swaps; s++) {
-    var worst = getWorstVillage(wc);
+    var worst = getWorstVillage(wc, wr);
     if (worst.idx < 0) break;
-    var best = getBestPerimeter(wc);
+    var best = getBestPerimeter(wc, wr);
     if (best.idx < 0) break;
     if (best.score > worst.score + mu) {
       village[worst.idx] = 0; updateNeighbors((worst.idx/COLS)|0, worst.idx%COLS, -1);
@@ -428,15 +436,15 @@ function onEnvChange() {
 
 function onPopChange() {
   if (baseUDirty) recomputeBaseU();
-  var target = gp("pop"), wc = gp("wc");
+  var target = gp("pop"), wc = gp("wc"), wr = gp("wr");
   var cur = 0; for (var i = 0; i < N; i++) if (village[i]) cur++;
   while (cur < target) {
-    var best = getBestPerimeter(wc);
+    var best = getBestPerimeter(wc, wr);
     if (best.idx < 0) break;
     village[best.idx] = 1; updateNeighbors((best.idx/COLS)|0, best.idx%COLS, 1); cur++;
   }
   while (cur > target) {
-    var worst = getWorstVillage(wc);
+    var worst = getWorstVillage(wc, wr);
     if (worst.idx < 0) break;
     village[worst.idx] = 0; updateNeighbors((worst.idx/COLS)|0, worst.idx%COLS, -1); cur--;
   }
@@ -450,7 +458,7 @@ function initVillage() {
   distanceTransform();
   recomputeBaseU();
 
-  var pop = gp("pop"), wc = gp("wc");
+  var pop = gp("pop"), wc = gp("wc"), wr = gp("wr");
   var centerR = ROWS/2, centerC = COLS/2;
   var bestScore = -Infinity, bestIdx = 0;
   for (var i = 0; i < N; i++) {
@@ -462,7 +470,7 @@ function initVillage() {
   }
   village[bestIdx] = 1; updateNeighbors((bestIdx/COLS)|0, bestIdx%COLS, 1);
   for (var g = 1; g < pop; g++) {
-    var best = getBestPerimeter(wc);
+    var best = getBestPerimeter(wc, wr);
     if (best.idx < 0) break;
     village[best.idx] = 1; updateNeighbors((best.idx/COLS)|0, best.idx%COLS, 1);
   }
