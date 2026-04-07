@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Persian Gulf Settlement Simulator</title>
+  <script>
+    window.MathJax = { tex: { inlineMath: [['\\(','\\)']], displayMath: [['\\[','\\]']] } };
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js" async></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: Georgia, 'Times New Roman', serif; color: #222; background: #fff; line-height: 1.55; font-size: 15px; }
+    nav { padding: 10px 24px; font-family: sans-serif; font-size: 13px; border-bottom: 1px solid #ddd; }
+    nav a { color: #444; text-decoration: none; } nav a:hover { text-decoration: underline; }
+    .sep { color: #bbb; margin: 0 4px; }
+    .columns { display: flex; max-width: 1200px; margin: 0 auto; padding: 24px; gap: 32px; }
+    .sidebar { width: 260px; flex-shrink: 0; }
+    .sidebar h1 { font-size: 20px; font-weight: normal; margin-bottom: 12px; line-height: 1.3; }
+    .sidebar p { font-size: 14px; color: #555; line-height: 1.5; }
+    .separator { border: none; border-top: 1px solid #ddd; margin: 14px 0; }
+    .main { flex: 1; min-width: 0; }
+    .main p { margin-bottom: 0.8em; }
+    #sim-canvas { width: 100%; image-rendering: pixelated; background: #000; display: block; border: 1px solid #ccc; }
+    #sim-info { font-family: monospace; font-size: 13px; margin: 0.4em 0; }
+    #sim-legend { font-family: monospace; font-size: 12px; margin-bottom: 0.8em; display: flex; flex-wrap: wrap; gap: 6px 14px; }
+    #sim-legend span { display: inline-flex; align-items: center; gap: 3px; }
+    .legend-dot { display: inline-block; width: 10px; height: 10px; vertical-align: middle; }
+    #sim-controls { margin-bottom: 1em; }
+    #sim-controls button { padding: 0.2em 0.8em; cursor: pointer; font-family: sans-serif; font-size: 13px; }
+    .slider-grid { display: grid; grid-template-columns: auto 1fr auto; gap: 4px 10px; align-items: center; max-width: 440px; font-size: 85%; margin-top: 0.5em; }
+    .slider-grid label { font-family: sans-serif; font-size: 13px; }
+    .slider-grid span { font-family: monospace; font-size: 12px; text-align: right; min-width: 45px; }
+    .radio-group { font-family: sans-serif; font-size: 13px; margin: 0.5em 0; display: flex; gap: 16px; align-items: center; }
+    .radio-group label { cursor: pointer; display: flex; align-items: center; gap: 3px; }
+    #loading-msg { font-size: 85%; color: #767676; }
+  </style>
+</head>
+<body>
+
+<nav>
+  <a href="#">Home</a> <span class="sep">&middot;</span>
+  <a href="#">Research</a>
+</nav>
+
+<div class="columns">
+
+  <div class="sidebar">
+    <h1>Persian Gulf Settlement Simulator</h1>
+
+    <p>Settlements cluster near water for economic benefit, group together to share infrastructure, and resist moving unless the pressure to relocate becomes strong enough. When the sea level changes, the coastline shifts and agents on newly flooded cells are displaced.</p>
+
+    <hr class="separator">
+
+    <p>The attractor can be set to <b>rivers only</b> (agents seek proximity to river channels) or <b>river + ocean</b> (any water body attracts). When the sea level rises and submerges a river cell, that cell becomes ocean.</p>
+
+    <hr class="separator">
+
+    <p style="font-size:13px; color:#888;">10&times;10 box-filtered GEBCO 2025.<br>
+    336&times;240 grid, ~4.1&times;4.6 km/px.<br>
+    By Brayden Noh.</p>
+  </div>
+
+  <div class="main">
+
+    <p>The grid has three cell types: <b style="color:#0000FF;">ocean</b> (elevation &le; sea level), <b style="color:#0066cc;">river</b> (Strahler order &ge; threshold, not submerged), and <b>land</b>. Settlements \(V(\mathbf{x},t)=1\) are shown in <b style="color:#e53935;">red</b>. Population is conserved: \(\sum V = N\).</p>
+
+    <p>Each land cell has a utility</p>
+
+    \[
+    U(\mathbf{x}) \;=\; -\,w_d \, \mathcal{D}(\mathbf{x}) \;+\; w_c \, \mathcal{C}(\mathbf{x})
+    \]
+
+    <p>where \(\mathcal{D}\) is the Euclidean distance to the nearest <em>attractor</em> water cell and \(\mathcal{C}\) counts occupied Moore neighbors. The attractor set is controlled by the toggle below: either rivers only, or rivers + ocean. The friction threshold \(\mu\) governs voluntary migration: the worst cell swaps with the best empty cell only if the gain exceeds \(\mu\).</p>
+
+    <!-- Canvas -->
+    <div style="margin: 1em 0;">
+      <canvas id="sim-canvas" width="336" height="240"></canvas>
+    </div>
+
+    <div id="sim-info">
+      Population: <span id="i-pop">0</span> &nbsp;&bull;&nbsp;
+      Clusters: <span id="i-clusters">0</span> &nbsp;&bull;&nbsp;
+      Ocean: <span id="i-ocean">0</span> &nbsp;&bull;&nbsp;
+      Rivers: <span id="i-rivers">0</span>
+    </div>
+
+    <div id="sim-legend">
+      <span><span class="legend-dot" style="background:#0000FF;"></span> Ocean</span>
+      <span><span class="legend-dot" style="background:#0066cc;"></span> River</span>
+      <span><span class="legend-dot" style="background:#e53935;"></span> Settlement</span>
+      <span><span class="legend-dot" style="background:#6a9e58;"></span> Land</span>
+    </div>
+
+    <div id="sim-controls">
+      <div style="margin-bottom: 0.4em;">
+        <button id="btn-play">&#9654; Play</button>
+        <button id="btn-pause" disabled>&#9646;&#9646; Pause</button>
+        <button id="btn-settle">Settle</button>
+        <button id="btn-reset">Reset</button>
+      </div>
+
+      <div class="radio-group">
+        <b>Attractor:</b>
+        <label><input type="radio" name="attract" id="attract-river" value="river" checked> River only</label>
+        <label><input type="radio" name="attract" id="attract-both" value="both"> River + Ocean</label>
+      </div>
+
+      <div class="slider-grid">
+        <label for="sl-sea">Sea level</label>
+        <input id="sl-sea" type="range" min="-200" max="200" value="0" step="1">
+        <span id="v-sea">0 m</span>
+
+        <label for="sl-strahler">Stream order \(\ge\)</label>
+        <input id="sl-strahler" type="range" min="0" max="5" value="2" step="1">
+        <span id="v-strahler">2</span>
+
+        <label for="sl-pop">Population</label>
+        <input id="sl-pop" type="range" min="50" max="3000" value="500" step="50">
+        <span id="v-pop">500</span>
+
+        <label for="sl-wd">\(w_d\) (water)</label>
+        <input id="sl-wd" type="range" min="0" max="10" step="0.1" value="2.0">
+        <span id="v-wd">2.0</span>
+
+        <label for="sl-wc">\(w_c\) (cluster)</label>
+        <input id="sl-wc" type="range" min="0" max="10" step="0.1" value="4.0">
+        <span id="v-wc">4.0</span>
+
+        <label for="sl-mu">\(\mu\) (friction)</label>
+        <input id="sl-mu" type="range" min="0" max="50" step="0.5" value="5">
+        <span id="v-mu">5</span>
+
+        <label for="sl-swaps">Swaps/step</label>
+        <input id="sl-swaps" type="range" min="1" max="200" step="1" value="20">
+        <span id="v-swaps">20</span>
+
+        <label for="sl-delay">Frame delay</label>
+        <input id="sl-delay" type="range" min="0" max="500" step="10" value="50">
+        <span id="v-delay">50 ms</span>
+      </div>
+    </div>
+
+    <p id="loading-msg"><i>Loading elevation data&hellip;</i></p>
+
+  </div>
+</div>
+
+<script>
+(async function() {
+"use strict";
+
+var COLS = 336, ROWS = 240, N = COLS * ROWS;
+var ELEV_MIN = -3600, ELEV_MAX = 4500, ELEV_OFF = -ELEV_MIN, ELEV_RANGE = ELEV_MAX - ELEV_MIN + 1;
+var DR = [-1,-1,-1,0,0,1,1,1], DC = [-1,0,1,-1,1,-1,0,1];
+
+var canvas = document.getElementById("sim-canvas");
+var ctx = canvas.getContext("2d");
+var imgData = ctx.createImageData(COLS, ROWS);
+var pixels = new Uint32Array(imgData.data.buffer);
+
+var S = {}, V = {};
+["sea","strahler","pop","wd","wc","mu","swaps","delay"].forEach(function(k) {
+  S[k] = document.getElementById("sl-" + k);
+  V[k] = document.getElementById("v-" + k);
+});
+function gp(k) { return parseFloat(S[k].value); }
+
+var iPop = document.getElementById("i-pop");
+var iClusters = document.getElementById("i-clusters");
+var iOcean = document.getElementById("i-ocean");
+var iRivers = document.getElementById("i-rivers");
+var btnPlay = document.getElementById("btn-play");
+var btnPause = document.getElementById("btn-pause");
+var btnSettle = document.getElementById("btn-settle");
+var btnReset = document.getElementById("btn-reset");
+var radAttractRiver = document.getElementById("attract-river");
+var radAttractBoth = document.getElementById("attract-both");
+
+function getAttractMode() { return radAttractBoth.checked ? "both" : "river"; }
+
+/* slider labels */
+S.sea.oninput = function(){ V.sea.textContent = this.value + " m"; onEnvChange(); };
+S.strahler.oninput = function(){ V.strahler.textContent = this.value == 0 ? "off" : this.value; onEnvChange(); };
+S.pop.oninput = function(){ V.pop.textContent = this.value; };
+S.pop.onchange = function(){ onPopChange(); };
+S.wd.oninput = function(){ V.wd.textContent = this.value; baseUDirty = true; };
+S.wc.oninput = function(){ V.wc.textContent = this.value; };
+S.mu.oninput = function(){ V.mu.textContent = this.value; };
+S.swaps.oninput = function(){ V.swaps.textContent = this.value; };
+S.delay.oninput = function(){ V.delay.textContent = this.value + " ms"; };
+radAttractRiver.onchange = function(){ onEnvChange(); };
+radAttractBoth.onchange = function(){ onEnvChange(); };
+
+/* ---- Load data ---- */
+var elevResp = await fetch("elevation_10x10.bin");
+var elevation = new Int16Array(await elevResp.arrayBuffer());
+var strahResp = await fetch("strahler_10x10.bin");
+var strahler = new Uint8Array(await strahResp.arrayBuffer());
+document.getElementById("loading-msg").style.display = "none";
+
+/* ---- Terrain color LUT ---- */
+var terrainLUT = new Uint32Array(ELEV_RANGE);
+(function buildLUT() {
+  var stops = [
+    [-3600,195,215,195], [-500,185,205,175], [-50,175,200,160],
+    [0,45,135,45], [100,75,160,55], [300,125,178,70],
+    [700,180,185,85], [1200,200,170,85], [2000,175,128,62],
+    [3000,148,98,52], [4500,128,82,48]
+  ];
+  for (var e = ELEV_MIN; e <= ELEV_MAX; e++) {
+    var lo = stops[0], hi = stops[stops.length-1];
+    for (var s = 0; s < stops.length-1; s++) {
+      if (e >= stops[s][0] && e <= stops[s+1][0]) { lo = stops[s]; hi = stops[s+1]; break; }
+    }
+    var t = lo[0] === hi[0] ? 0 : (e - lo[0]) / (hi[0] - lo[0]);
+    t = Math.max(0, Math.min(1, t));
+    var r = Math.round(lo[1]+(hi[1]-lo[1])*t);
+    var g = Math.round(lo[2]+(hi[2]-lo[2])*t);
+    var b = Math.round(lo[3]+(hi[3]-lo[3])*t);
+    terrainLUT[e - ELEV_MIN] = 0xFF000000 | (b<<16) | (g<<8) | r;
+  }
+})();
+
+// ABGR format for Uint32Array pixel writes
+var COL_OCEAN  = 0xFFFF0000;  // #0000FF
+var COL_RIVER  = 0xFFCC6600;  // #0066CC
+var COL_AGENT  = 0xFF3539E5;  // #E53935
+
+/* ---- State ---- */
+// cellType: 0=land, 1=ocean, 2=river
+var cellType = new Uint8Array(N);
+var attractMask = new Uint8Array(N);  // which cells are attractors for distance
+var dist = new Float32Array(N);
+var baseU = new Float32Array(N);
+var village = new Uint8Array(N);
+var neighbors = new Int16Array(N);
+var baseUDirty = true;
+var playing = false, animId = null, lastFrame = 0;
+
+/* ---- Cell types: ocean eats river ---- */
+function updateCellTypes() {
+  var sl = gp("sea"), mo = gp("strahler");
+  for (var i = 0; i < N; i++) {
+    if (elevation[i] <= sl) {
+      cellType[i] = 1;  // ocean (even if it was a river cell, sea eats it)
+    } else if (mo > 0 && strahler[i] >= mo) {
+      cellType[i] = 2;  // river (above sea level)
+    } else {
+      cellType[i] = 0;  // land
+    }
+  }
+}
+
+/* ---- Attractor mask based on mode ---- */
+function updateAttractMask() {
+  var mode = getAttractMode();
+  for (var i = 0; i < N; i++) {
+    if (mode === "both") {
+      attractMask[i] = (cellType[i] > 0) ? 1 : 0;  // ocean or river
+    } else {
+      attractMask[i] = (cellType[i] === 2) ? 1 : 0; // river only
+    }
+  }
+}
+
+/* ---- Water mask for blocking settlement ---- */
+function isWater(i) { return cellType[i] > 0; }
+
+/* ---- Euclidean distance transform ---- */
+function distanceTransform() {
+  var INF = 1e10;
+  var f = new Float32Array(N);
+  for (var i = 0; i < N; i++) f[i] = attractMask[i] ? 0 : INF;
+
+  var colBuf = new Float32Array(ROWS);
+  for (var c = 0; c < COLS; c++) {
+    colBuf[0] = f[c];
+    for (var r = 1; r < ROWS; r++) colBuf[r] = Math.min(f[r*COLS+c], colBuf[r-1]+1);
+    for (var r2 = ROWS-2; r2 >= 0; r2--) colBuf[r2] = Math.min(colBuf[r2], colBuf[r2+1]+1);
+    for (var r3 = 0; r3 < ROWS; r3++) f[r3*COLS+c] = colBuf[r3]*colBuf[r3];
+  }
+  var v = new Int32Array(COLS), z = new Float32Array(COLS+1), rowD = new Float32Array(COLS);
+  for (var r4 = 0; r4 < ROWS; r4++) {
+    var off = r4*COLS;
+    var k = 0; v[0] = 0; z[0] = -INF; z[1] = INF;
+    for (var q = 1; q < COLS; q++) {
+      var s = ((f[off+q]+q*q)-(f[off+v[k]]+v[k]*v[k]))/(2*q-2*v[k]);
+      while (s <= z[k]) { k--; s = ((f[off+q]+q*q)-(f[off+v[k]]+v[k]*v[k]))/(2*q-2*v[k]); }
+      k++; v[k] = q; z[k] = s; z[k+1] = INF;
+    }
+    k = 0;
+    for (var q2 = 0; q2 < COLS; q2++) {
+      while (z[k+1] < q2) k++;
+      var dq = q2-v[k]; rowD[q2] = dq*dq + f[off+v[k]];
+    }
+    for (var q3 = 0; q3 < COLS; q3++) dist[off+q3] = Math.sqrt(rowD[q3]);
+  }
+}
+
+/* ---- Base utility ---- */
+function recomputeBaseU() {
+  var wd = gp("wd");
+  for (var i = 0; i < N; i++) {
+    baseU[i] = (cellType[i] > 0) ? -1e20 : -(dist[i] * wd);
+  }
+  baseUDirty = false;
+}
+
+/* ---- Neighbors ---- */
+function updateNeighbors(r, c, delta) {
+  for (var d = 0; d < 8; d++) {
+    var rr = r+DR[d], cc = c+DC[d];
+    if (rr >= 0 && rr < ROWS && cc >= 0 && cc < COLS) neighbors[rr*COLS+cc] += delta;
+  }
+}
+
+function getBestPerimeter(wc) {
+  var best = -Infinity, idx = -1;
+  for (var i = 0; i < N; i++) {
+    if (village[i] || cellType[i] > 0 || neighbors[i] === 0) continue;
+    var sc = baseU[i] + neighbors[i] * wc;
+    if (sc > best) { best = sc; idx = i; }
+  }
+  if (idx === -1) {
+    for (var j = 0; j < N; j++) {
+      if (village[j] || cellType[j] > 0) continue;
+      var sc2 = baseU[j] + neighbors[j] * wc;
+      if (sc2 > best) { best = sc2; idx = j; }
+    }
+  }
+  return { idx: idx, score: best };
+}
+
+function getWorstVillage(wc) {
+  var worst = Infinity, idx = -1;
+  for (var i = 0; i < N; i++) {
+    if (!village[i]) continue;
+    var sc = baseU[i] + neighbors[i] * wc;
+    if (sc < worst) { worst = sc; idx = i; }
+  }
+  return { idx: idx, score: worst };
+}
+
+function handleDrowned() {
+  var wc = gp("wc"), drowned = [];
+  for (var i = 0; i < N; i++) { if (village[i] && cellType[i] > 0) drowned.push(i); }
+  for (var d = 0; d < drowned.length; d++) {
+    var idx = drowned[d]; village[idx] = 0;
+    updateNeighbors((idx/COLS)|0, idx%COLS, -1);
+  }
+  for (var d2 = 0; d2 < drowned.length; d2++) {
+    var best = getBestPerimeter(wc);
+    if (best.idx >= 0) {
+      village[best.idx] = 1;
+      updateNeighbors((best.idx/COLS)|0, best.idx%COLS, 1);
+    }
+  }
+}
+
+function caStep() {
+  if (baseUDirty) recomputeBaseU();
+  var wc = gp("wc"), mu = gp("mu"), swaps = gp("swaps");
+  for (var s = 0; s < swaps; s++) {
+    var worst = getWorstVillage(wc);
+    if (worst.idx < 0) break;
+    var best = getBestPerimeter(wc);
+    if (best.idx < 0) break;
+    if (best.score > worst.score + mu) {
+      village[worst.idx] = 0; updateNeighbors((worst.idx/COLS)|0, worst.idx%COLS, -1);
+      village[best.idx] = 1; updateNeighbors((best.idx/COLS)|0, best.idx%COLS, 1);
+    } else break;
+  }
+}
+
+function countClusters() {
+  var visited = new Uint8Array(N), count = 0, queue = [];
+  for (var i = 0; i < N; i++) {
+    if (!village[i] || visited[i]) continue;
+    count++; queue.length = 0; queue.push(i); visited[i] = 1;
+    while (queue.length) {
+      var idx = queue.pop(), r = (idx/COLS)|0, c = idx%COLS;
+      for (var d = 0; d < 8; d++) {
+        var rr = r+DR[d], cc = c+DC[d];
+        if (rr >= 0 && rr < ROWS && cc >= 0 && cc < COLS) {
+          var ni = rr*COLS+cc;
+          if (village[ni] && !visited[ni]) { visited[ni] = 1; queue.push(ni); }
+        }
+      }
+    }
+  }
+  return count;
+}
+
+/* ---- Render ---- */
+function render() {
+  for (var i = 0; i < N; i++) {
+    if (village[i])          pixels[i] = COL_AGENT;
+    else if (cellType[i]===1) pixels[i] = COL_OCEAN;
+    else if (cellType[i]===2) pixels[i] = COL_RIVER;
+    else                      pixels[i] = terrainLUT[elevation[i] + ELEV_OFF];
+  }
+  ctx.putImageData(imgData, 0, 0);
+}
+
+function updateInfo() {
+  var pop = 0, nOcean = 0, nRiver = 0;
+  for (var i = 0; i < N; i++) {
+    if (village[i]) pop++;
+    if (cellType[i] === 1) nOcean++;
+    else if (cellType[i] === 2) nRiver++;
+  }
+  iPop.textContent = pop;
+  iClusters.textContent = countClusters();
+  iOcean.textContent = nOcean;
+  iRivers.textContent = nRiver;
+}
+
+function onEnvChange() {
+  updateCellTypes();
+  updateAttractMask();
+  distanceTransform();
+  baseUDirty = true;
+  recomputeBaseU();
+  handleDrowned();
+  render(); updateInfo();
+}
+
+function onPopChange() {
+  if (baseUDirty) recomputeBaseU();
+  var target = gp("pop"), wc = gp("wc");
+  var cur = 0; for (var i = 0; i < N; i++) if (village[i]) cur++;
+  while (cur < target) {
+    var best = getBestPerimeter(wc);
+    if (best.idx < 0) break;
+    village[best.idx] = 1; updateNeighbors((best.idx/COLS)|0, best.idx%COLS, 1); cur++;
+  }
+  while (cur > target) {
+    var worst = getWorstVillage(wc);
+    if (worst.idx < 0) break;
+    village[worst.idx] = 0; updateNeighbors((worst.idx/COLS)|0, worst.idx%COLS, -1); cur--;
+  }
+  render(); updateInfo();
+}
+
+function initVillage() {
+  village.fill(0); neighbors.fill(0);
+  updateCellTypes();
+  updateAttractMask();
+  distanceTransform();
+  recomputeBaseU();
+
+  var pop = gp("pop"), wc = gp("wc");
+  var centerR = ROWS/2, centerC = COLS/2;
+  var bestScore = -Infinity, bestIdx = 0;
+  for (var i = 0; i < N; i++) {
+    if (cellType[i] > 0) continue;
+    var r = (i/COLS)|0, c = i%COLS;
+    var dCenter = Math.sqrt((r-centerR)*(r-centerR)+(c-centerC)*(c-centerC));
+    var sc = baseU[i] - dCenter*0.02;
+    if (sc > bestScore) { bestScore = sc; bestIdx = i; }
+  }
+  village[bestIdx] = 1; updateNeighbors((bestIdx/COLS)|0, bestIdx%COLS, 1);
+  for (var g = 1; g < pop; g++) {
+    var best = getBestPerimeter(wc);
+    if (best.idx < 0) break;
+    village[best.idx] = 1; updateNeighbors((best.idx/COLS)|0, best.idx%COLS, 1);
+  }
+  render(); updateInfo();
+}
+
+/* ---- Animation ---- */
+function animate(ts) {
+  if (!playing) return;
+  if (ts - lastFrame >= gp("delay")) { lastFrame = ts; caStep(); render(); updateInfo(); }
+  animId = requestAnimationFrame(animate);
+}
+function play() { playing = true; btnPlay.disabled = true; btnPause.disabled = false; lastFrame = performance.now(); animId = requestAnimationFrame(animate); }
+function pause() { playing = false; btnPlay.disabled = false; btnPause.disabled = true; if (animId) cancelAnimationFrame(animId); }
+function settle() { if (baseUDirty) recomputeBaseU(); for (var i = 0; i < 200; i++) caStep(); render(); updateInfo(); }
+function reset() { pause(); initVillage(); }
+
+btnPlay.onclick = play;
+btnPause.onclick = pause;
+btnSettle.onclick = settle;
+btnReset.onclick = reset;
+
+document.addEventListener("keydown", function(e) {
+  if (e.key === " ") { e.preventDefault(); playing ? pause() : play(); }
+  if (e.key === "r" || e.key === "R") reset();
+});
+
+initVillage();
+})();
+</script>
+</body>
+</html>
